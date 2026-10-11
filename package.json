@@ -1,0 +1,14 @@
+{
+  "name": "@red-cup-engineering/multiformats-services-section",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Groups self-describing computer content addresses built from multibase, multicodec, and multihash carriers.",
+  "exports": {
+    "./content-address-transformations": "./src/content-address-transformations.mjs"
+  },
+  "dependencies": {
+    "multiformats": "14.0.5",
+    "@red-cup-engineering/multihash-address-service": "workspace:*",
+    "@red-cup-engineering/json-services-section": "workspace:*"
+  }
+}
