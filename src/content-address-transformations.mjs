@@ -147,3 +147,68 @@ export async function mapRawBlockNi(body) {
     ni, ...describeCid(mapped, baseNamed(body.base)), byteLength: bytes.length,
   };
 }
+
+
+/**
+ * Retain an already-admitted IPFS raw block through the ORIGINAL shared NI
+ * custody producer. The host supplies one authorized contentSpace capability;
+ * remote callers cannot select its filesystem, namespace or permissions.
+ *
+ * mapRawBlockNi is the one CID/NI admission: it first reconstructs both
+ * identities from a SNAPSHOT of the same exact bytes, refusing a forged CID,
+ * non-raw DAG/UnixFS coordinate or non-SHA2-256 hash. Only then do we call
+ * the existing custody retain/putPath, rather than minting another store,
+ * CID gateway, hash family, or mutable object registry.
+ *
+ * The foreign CID is an address of one raw block, not proof that a remote IPFS
+ * peer pinned, served or authorized this data. Merkle-tree paths are not
+ * asserted Wang-edge matches, bead-thread relations or sheaf gluings.
+ */
+export async function retainRawBlockNi(body, { contentSpace, name, expected, path } = {}) {
+  request(body, ["carrier"], ["base", "expectedNi", "cid"]);
+  if (!contentSpace || typeof contentSpace.retain !== "function")
+    throw new TypeError("raw block NI retention requires an installed contentSpace.retain capability");
+  const named = name !== undefined || expected !== undefined || path !== undefined;
+  if (named && (typeof name !== "string" || !name ||
+      !Array.isArray(path) || path.length === 0 || path.length > 16 ||
+      (expected !== null && typeof expected !== "string") ||
+      typeof contentSpace.putPath !== "function"))
+    throw new TypeError("named raw block retention requires admitted name, path, expected root and putPath");
+  // A caller object can contain getters or be mutated while SHA-2 runs.
+  // Capture its original bytes, MIME label and foreign coordinates ONCE.
+  const offeredCarrier = body.carrier;
+  const carrierSnapshot = offeredCarrier && typeof offeredCarrier === "object" &&
+    !Array.isArray(offeredCarrier) ? { ...offeredCarrier } : offeredCarrier;
+  const { cid: offeredCid, expectedNi: offeredNi, base: offeredBase } = body;
+  const mediaType = carrierSnapshot?.mediaType;
+  const bytes = content({ carrier: carrierSnapshot });
+  const frozenInput = {
+    carrier: { mediaType, contentBase64: Buffer.from(bytes).toString("base64") },
+    ...(offeredCid === undefined ? {} : { cid: offeredCid }),
+    ...(offeredNi === undefined ? {} : { expectedNi: offeredNi }),
+    ...(offeredBase === undefined ? {} : { base: offeredBase }),
+  };
+  const pair = await mapRawBlockNi(frozenInput);
+  // Caller-visible media type is presentation metadata, never part of the
+  // cryptographic raw-block equivalence. The original custodian keeps its
+  // exact media-type sidecar and refuses conflicting re-presentations.
+  const stored = named
+    ? await contentSpace.putPath({
+      name, expected, path, bytes: Uint8Array.from(bytes), mediaType,
+    })
+    : await contentSpace.retain(Uint8Array.from(bytes), { mediaType });
+  const retainedNi = named ? stored?.retained?.ni : stored?.ni;
+  if (retainedNi !== pair.ni || (named && stored?.ni !== pair.ni))
+    throw new TypeError("original NI custody receipt disagrees with the admitted raw CID bytes");
+  return Object.freeze({
+    ...pair,
+    custody: Object.freeze({
+      ni: retainedNi,
+      ...(stored.durable === true || stored.retained?.durable === true ? { durable: true } : {}),
+      ...(named ? {
+        name, rootNi: stored.rootNi, expected,
+        path: Object.freeze([...path]), published: stored.published === true,
+      } : {}),
+    }),
+  });
+}

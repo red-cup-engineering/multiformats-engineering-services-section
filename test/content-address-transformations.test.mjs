@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { base16 } from "multiformats/bases/base16";
 import { CID } from "multiformats/cid";
 import * as Digest from "multiformats/hashes/digest";
-import { nameMultihash, inspectMultihash, compareMultihash, nameRawBlock, inspectCid, compareRawBlock, mapRawBlockNi } from "../src/content-address-transformations.mjs";
+import { nameMultihash, inspectMultihash, compareMultihash, nameRawBlock, inspectCid, compareRawBlock, mapRawBlockNi, retainRawBlockNi } from "../src/content-address-transformations.mjs";
 const carrier = text => ({ mediaType: "application/octet-stream", contentBase64: Buffer.from(text).toString("base64") });
 
 test("current IPFS specification raw hello vector retains its exact block bytes", async () => {
@@ -92,4 +92,127 @@ test("IPFS raw CID and canonical house NI retain distinct typed coordinates for 
   }), /only SHA2-256 raw-block CIDs/);
   await assert.rejects(mapRawBlockNi({ carrier: carrier("hello"), base: "prototype" }),
     /base must be/);
+});
+
+
+test("a verified native IPFS raw block becomes original NI custody bytes without minting another store", async () => {
+  const bytes = Buffer.from("hello");
+  const expectedNi = "ni:///sha-256;" + createHash("sha256").update(bytes).digest("base64url");
+  const originalCid = (await mapRawBlockNi({ carrier: carrier("hello") })).cid;
+  const foreignCid = inspectCid({ cid: originalCid, base: "base58btc" }).cid;
+  const calls = [];
+  const contentSpace = {
+    async retain(raw, { mediaType }) {
+      calls.push({ operation: "retain", raw: Buffer.from(raw), mediaType });
+      return { ni: "ni:///sha-256;" +
+        createHash("sha256").update(raw).digest("base64url"), durable: true };
+    },
+  };
+  const written = await retainRawBlockNi({
+    carrier: carrier("hello"), cid: foreignCid, expectedNi, base: "base32",
+  }, { contentSpace });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].raw, bytes);
+  assert.equal(calls[0].mediaType, "application/octet-stream");
+  assert.equal(written.ni, expectedNi);
+  assert.equal(written.cid, originalCid);
+  assert.equal(written.sourceCid, foreignCid);
+  assert.deepEqual(written.custody, { ni: expectedNi, durable: true });
+  assert.equal(Object.isFrozen(written), true);
+  assert.equal(Object.isFrozen(written.custody), true);
+});
+
+test("the original named Merkle publisher, not the IPFS CID, chooses root and CAS publication", async () => {
+  const bytes = Buffer.from([0, 1, 1, 0]);
+  const ni = "ni:///sha-256;" + createHash("sha256").update(bytes).digest("base64url");
+  const root = "ni:///sha-256;" + createHash("sha256").update("tree-root").digest("base64url");
+  const records = [];
+  const contentSpace = {
+    async retain() { throw Error("named publisher must use putPath only"); },
+    async putPath(input) {
+      records.push(input);
+      return { name: input.name, ni, rootNi: root, published: true,
+        retained: { ni, durable: true } };
+    },
+  };
+  const result = await retainRawBlockNi({
+    carrier: { mediaType: "application/octet-stream", contentBase64: bytes.toString("base64") },
+  }, {
+    contentSpace, name: "science/l-space", expected: null, path: ["tilings", "wang"],
+  });
+  assert.equal(records.length, 1);
+  assert.equal(records[0].name, "science/l-space");
+  assert.equal(records[0].expected, null);
+  assert.deepEqual(records[0].path, ["tilings", "wang"]);
+  assert.deepEqual(Buffer.from(records[0].bytes), bytes);
+  assert.equal(result.ni, ni);
+  assert.equal(result.custody.rootNi, root);
+  assert.equal(result.custody.published, true);
+  assert.equal(result.custody.name, "science/l-space");
+  assert.deepEqual(result.custody.path, ["tilings", "wang"]);
+  assert.notEqual(result.custody.rootNi, result.custody.ni);
+});
+
+test("CID, NI and source-authority refusals prevent any call to physical custody", async () => {
+  const valid = await mapRawBlockNi({ carrier: carrier("hello") });
+  const sha512 = await nameRawBlock({ carrier: carrier("hello"), algorithm: "sha2-512" });
+  const calls = [];
+  const contentSpace = {
+    async retain() { calls.push("retain"); return { ni: valid.ni }; },
+    async putPath() { calls.push("putPath"); return { ni: valid.ni, retained: { ni: valid.ni } }; },
+  };
+  await assert.rejects(retainRawBlockNi({ carrier: carrier("hello") }),
+    /installed contentSpace.retain/);
+  await assert.rejects(retainRawBlockNi({ carrier: carrier("changed"), cid: valid.cid },
+    { contentSpace }), /differ from the supplied CID/);
+  await assert.rejects(retainRawBlockNi({ carrier: carrier("changed"), expectedNi: valid.ni },
+    { contentSpace }), /differ from the expected NI/);
+  await assert.rejects(retainRawBlockNi({ carrier: carrier("hello"), cid: sha512.cid },
+    { contentSpace }), /only SHA2-256 raw-block CIDs/);
+  await assert.rejects(retainRawBlockNi({
+    carrier: carrier("hello"), contentSpace,
+  }, { contentSpace }), /request requires carrier/);
+  await assert.rejects(retainRawBlockNi({ carrier: carrier("hello") },
+    { contentSpace, name: "science/l-space", path: ["wang"] }),
+    /admitted name, path, expected root and putPath/);
+  assert.deepEqual(calls, [], "unadmitted coordinates never reach the original writer");
+});
+
+test("original custody mismatch and stale compare-and-publish never produce a false IPFS retention receipt", async () => {
+  const valid = await mapRawBlockNi({ carrier: carrier("hello") });
+  const contentSpace = {
+    async retain() { return { ni: valid.ni.slice(0, -1) + "A" }; },
+    async putPath() { throw new TypeError("Persisted content reference changed before publication"); },
+  };
+  await assert.rejects(retainRawBlockNi({ carrier: carrier("hello") },
+    { contentSpace }), /receipt disagrees/);
+  await assert.rejects(retainRawBlockNi({ carrier: carrier("hello") }, {
+    contentSpace, name: "science/l-space", expected: valid.ni, path: ["wang"],
+  }), /changed before publication/);
+});
+
+test("carrier and foreign CID getters are captured once before async hashing and custody", async () => {
+  const input = carrier("hello");
+  const known = await mapRawBlockNi({ carrier: input });
+  let carrierReads = 0, cidReads = 0;
+  const original = {
+    carrier: {
+      mediaType: "application/octet-stream",
+      get contentBase64() { carrierReads++; return carrierReads === 1
+        ? input.contentBase64 : Buffer.from("malicious-later").toString("base64"); },
+    },
+    get cid() { cidReads++; return cidReads === 1 ? known.cid : "invalid-later"; },
+  };
+  const stored = [];
+  const contentSpace = {
+    async retain(raw) {
+      stored.push(Buffer.from(raw));
+      return { ni: known.ni };
+    },
+  };
+  const result = await retainRawBlockNi(original, { contentSpace });
+  assert.equal(result.ni, known.ni);
+  assert.deepEqual(stored, [Buffer.from("hello")]);
+  assert.equal(carrierReads, 1);
+  assert.equal(cidReads, 1);
 });

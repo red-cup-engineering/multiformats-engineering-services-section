@@ -1,6 +1,6 @@
 {
   "name": "@red-cup-engineering/multiformats-services-section",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "type": "module",
   "description": "Groups self-describing computer content addresses built from multibase, multicodec, and multihash carriers.",
   "exports": {

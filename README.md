@@ -65,3 +65,62 @@ become the canonical NI of its *materialized file bytes* merely because
 some encoded object refers to those bytes. Those external coordinates need
 distinct typed adapters and the corresponding carrier bytes and witnesses.
 The API does not introduce another canonical internal byte address.
+
+
+## Store an admitted IPFS raw block in the shared NI space
+
+`retainRawBlockNi({ carrier, cid?, expectedNi?, base? }, { contentSpace,
+name?, expected?, path? })` is the **original Multiformats owner's**
+next producer-to-consumer step. The first argument contains the previously
+defined, bounded raw CID/NI request; the second is a **trusted host-supplied**
+instance of the existing URI Content Custody `./space` interface.
+
+The operation snapshots the caller's exact bytes, MIME label and foreign
+coordinates once; uses **the same** `mapRawBlockNi` for SHA2-256/raw-CIDv1
+admission; then invokes the **original** `contentSpace.retain` or
+`contentSpace.putPath` producer. It refuses an inconsistent custody NI
+receipt. No new byte store, CID gateway, UnixFS decoder, network pinning
+service, authority grant, hash type or relation schema is fabricated.
+
+```js
+import { retainRawBlockNi } from
+  "@red-cup-engineering/multiformats-services-section/content-address-transformations";
+
+// contentSpace is supplied by the actual installed and authorized host:
+// createContentAddressedSpace({ root, durableRoot, namespaces })
+// from @red-cup-engineering/immutable-content-custody-service/space.
+const admitted = await retainRawBlockNi({
+  carrier: {
+    mediaType: "application/octet-stream",
+    contentBase64: Buffer.from("hello").toString("base64"),
+  },
+  cid: "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq",
+}, {
+  contentSpace,
+  name: "science/l-space",
+  expected: null,
+  path: ["tilings", "wang"],
+});
+console.log(admitted.ni, admitted.cid, admitted.custody.rootNi);
+```
+
+Omit `name`, `expected`, and `path` together to retain bytes without a
+mutable namespace change. To advance a namespace, pass the actual prior
+root NI as `expected`, not the CID; the original custody compare-and-publish
+operation refuses stale writers. The returned `custody` object includes
+the original retained NI and, when named, the resulting immutable Merkle
+root. A separately admitted CAIRN reader can then use that root through
+`GET /api/marks/tree` and TUFTE's `/tree` projection without another
+storage format. Those read interfaces retain their own host authorization
+and per-root, per-child disclosure decisions.
+
+This is a **single raw-block interchange lane** at a bounded 64 KiB.
+For real IPFS multi-block exchange, CAR archive transport, UnixFS DAG
+decoding, Guix derivation realization, Git object provenance, Plan 9 mounts,
+FluffOS virtual objects, and sheaf/Chu/Wang interpretation, a block CID is
+only an input coordinate. None of those distinct behaviors follows from
+`cid`, `ni`, or the existence of a slot in a Merkle tree.
+
+As with the original coordinate bridge, merged source does not establish a
+published new Multiformats edition, a live configured custodian, IPFS
+networking, or independently received CAIRN/TUFTE/public service.
