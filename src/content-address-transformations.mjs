@@ -9,6 +9,7 @@ import * as Digest from "multiformats/hashes/digest";
 import { sha256, sha512 } from "multiformats/hashes/sha2";
 import { createMultihash, readMultihash, verifyMultihash } from "@red-cup-engineering/multihash-address-service/address";
 import { decodeJsonByteCarrier } from "@red-cup-engineering/json-services-section/decode-json-byte-carrier";
+import { isNiUri, makeNiUri } from "@red-cup-engineering/uri-services-section/ni-uri";
 
 const BASES = Object.freeze({ base16, base32, base36, base58btc, base64url });
 const decoder = base16.decoder.or(base32.decoder).or(base36.decoder).or(base58btc.decoder).or(base64url.decoder);
@@ -102,4 +103,47 @@ export async function compareRawBlock(body) {
   if (!hasher || claim.multihash.size !== (hasher === sha256 ? 32 : 64)) throw new TypeError("raw-block verification requires a complete SHA2-256 or SHA2-512 digest");
   const bytes = content(body), digest = await hasher.digest(bytes), expected = CID.createV1(RAW, digest);
   return { matches: Digest.equals(claim.multihash, digest), claimedCid: claim.toV1().toString(), expectedCid: expected.toString(), codec: RAW, algorithm: hasher.name, byteLength: bytes.length };
+}
+
+/**
+ * Typed IPFS raw-block / house-NI coordinate bridge, grounded in received bytes.
+ *
+ * Every mapping is reconstructed from exact caller-supplied bytes using the
+ * original NI producer. The output CID is a CIDv1 raw block with SHA2-256;
+ * a caller-supplied external CID is only admitted if it is a canonical raw
+ * SHA2-256 CID for those same bytes. UnixFS/DAG roots, Git OIDs and Guix
+ * derivation paths are NOT interchangeable with an NI of file bytes.
+ *
+ * This module neither retrieves content nor installs an external block.
+ */
+export async function mapRawBlockNi(body) {
+  request(body, ["carrier"], ["base", "expectedNi", "cid"]);
+  const bytes = content(body), ni = makeNiUri(bytes);
+  if (body.expectedNi !== undefined) {
+    if (!isNiUri(body.expectedNi))
+      throw new TypeError("expectedNi must be a canonical house SHA-256 NI");
+    if (body.expectedNi !== ni)
+      throw new TypeError("received raw bytes differ from the expected NI");
+  }
+  if (body.cid !== undefined) {
+    const incoming = cid({ cid: body.cid });
+    if (incoming.code !== RAW || incoming.multihash.code !== sha256.code ||
+        incoming.multihash.size !== 32)
+      throw new TypeError("NI bridge accepts only SHA2-256 raw-block CIDs");
+    const digest = await sha256.digest(bytes);
+    if (!Digest.equals(incoming.multihash, digest))
+      throw new TypeError("received raw bytes differ from the supplied CID");
+    const mapped = CID.createV1(RAW, digest);
+    return {
+      kind: "semiotic-content.raw-block-coordinate-pair", version: 1,
+      ni, ...describeCid(mapped, baseNamed(body.base)), byteLength: bytes.length,
+      sourceCid: body.cid,
+    };
+  }
+  const digest = await sha256.digest(bytes);
+  const mapped = CID.createV1(RAW, digest);
+  return {
+    kind: "semiotic-content.raw-block-coordinate-pair", version: 1,
+    ni, ...describeCid(mapped, baseNamed(body.base)), byteLength: bytes.length,
+  };
 }

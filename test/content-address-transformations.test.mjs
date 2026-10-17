@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { base16 } from "multiformats/bases/base16";
 import { CID } from "multiformats/cid";
 import * as Digest from "multiformats/hashes/digest";
-import { nameMultihash, inspectMultihash, compareMultihash, nameRawBlock, inspectCid, compareRawBlock } from "../src/content-address-transformations.mjs";
+import { nameMultihash, inspectMultihash, compareMultihash, nameRawBlock, inspectCid, compareRawBlock, mapRawBlockNi } from "../src/content-address-transformations.mjs";
 const carrier = text => ({ mediaType: "application/octet-stream", contentBase64: Buffer.from(text).toString("base64") });
 
 test("current IPFS specification raw hello vector retains its exact block bytes", async () => {
@@ -51,4 +51,45 @@ test("malformed CID bytes and text refuse; raw verification never substitutes DA
   await assert.rejects(nameRawBlock({ carrier: carrier("hello"), algorithm: "identity" }));
   await assert.rejects(nameRawBlock({ carrier: carrier("hello"), base: "constructor" }));
   await assert.rejects(nameRawBlock({ carrier: { mediaType: "application/octet-stream", contentBase64: Buffer.alloc(65537).toString("base64") } }));
+});
+
+test("IPFS raw CID and canonical house NI retain distinct typed coordinates for exactly the same bytes", async () => {
+  const bytes = Buffer.from("hello");
+  const mapped = await mapRawBlockNi({ carrier: carrier("hello") });
+  assert.equal(mapped.kind, "semiotic-content.raw-block-coordinate-pair");
+  assert.equal(mapped.version, 1);
+  assert.equal(mapped.ni, "ni:///sha-256;" + createHash("sha256").update(bytes).digest("base64url"));
+  assert.equal(mapped.cid, "bafkreibm6jg3ux5qumhcn2b3flc3tyu6dmlb4xa7u5bf44yegnrjhc4yeq");
+  assert.equal(mapped.codec, 85);
+  assert.equal(mapped.multihash.digestBase64url, mapped.ni.slice("ni:///sha-256;".length));
+  assert.equal(mapped.byteLength, bytes.length);
+  assert.equal(Object.hasOwn(mapped, "sourceCid"), false);
+
+  const foreignBase = inspectCid({ cid: mapped.cid, base: "base58btc" }).cid;
+  const imported = await mapRawBlockNi({
+    carrier: carrier("hello"), cid: foreignBase, expectedNi: mapped.ni, base: "base32",
+  });
+  assert.equal(imported.cid, mapped.cid);
+  assert.equal(imported.ni, mapped.ni);
+  assert.equal(imported.sourceCid, foreignBase,
+    "a source carrier coordinate must be preserved, not renamed to the house NI");
+
+  await assert.rejects(mapRawBlockNi({
+    carrier: carrier("changed"), cid: mapped.cid,
+  }), /received raw bytes differ from the supplied CID/);
+  await assert.rejects(mapRawBlockNi({
+    carrier: carrier("changed"), expectedNi: mapped.ni,
+  }), /received raw bytes differ from the expected NI/);
+  await assert.rejects(mapRawBlockNi({
+    carrier: carrier("hello"), expectedNi: "sha256:" + createHash("sha256").update("hello").digest("hex"),
+  }), /canonical house SHA-256 NI/);
+  await assert.rejects(mapRawBlockNi({
+    carrier: carrier("hello"), cid: "QmdfTbBqBPQ7VNxZEYEj14VmRuZBkqFbiwReogJgS1zR1n",
+  }), /only SHA2-256 raw-block CIDs/);
+  const sha512Raw = await nameRawBlock({ carrier: carrier("hello"), algorithm: "sha2-512" });
+  await assert.rejects(mapRawBlockNi({
+    carrier: carrier("hello"), cid: sha512Raw.cid,
+  }), /only SHA2-256 raw-block CIDs/);
+  await assert.rejects(mapRawBlockNi({ carrier: carrier("hello"), base: "prototype" }),
+    /base must be/);
 });
