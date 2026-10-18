@@ -3,6 +3,11 @@
   "version": "0.1.4",
   "type": "module",
   "description": "Groups self-describing computer content addresses built from multibase, multicodec, and multihash carriers.",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/computer-content-address-engineering-services-section.git",
+    "directory": "services/multiformats-services-section"
+  },
   "exports": {
     "./content-address-transformations": "./src/content-address-transformations.mjs"
   },

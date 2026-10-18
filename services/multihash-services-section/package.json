@@ -1,6 +1,11 @@
 {
   "name": "@red-cup-engineering/multihash-services-section",
   "version": "0.1.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/red-cup-engineering/computer-content-address-engineering-services-section.git",
+    "directory": "services/multiformats-services-section/services/multihash-services-section"
+  },
   "type": "module",
   "description": "Groups services whose carrier is a self-describing multihash byte commitment."
 }
