@@ -1,11 +1,11 @@
 {
-  "name": "@red-cup-engineering/multiformats-services-section",
+  "name": "@red-cup-engineering/multiformats-engineering-services-section",
   "version": "0.1.4",
   "type": "module",
   "description": "Groups self-describing computer content addresses built from multibase, multicodec, and multihash carriers.",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/red-cup-engineering/multiformats-services-section.git"
+    "url": "git+https://github.com/red-cup-engineering/multiformats-engineering-services-section.git"
   },
   "exports": {
     "./content-address-transformations": "./src/content-address-transformations.mjs"
