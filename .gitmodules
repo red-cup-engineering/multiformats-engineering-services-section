@@ -1,4 +1,4 @@
 [submodule "multihash-services-section"]
 	path = services/multihash-services-section
-	url = https://github.com/red-cup-engineering/multihash-services-section.git
+	url = https://github.com/red-cup-engineering/multihash-engineering-services-section.git
 	branch = main
