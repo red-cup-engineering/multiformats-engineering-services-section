@@ -45,7 +45,7 @@ coordinate adapter** for received exact bytes, added at the existing
 multiformats owner rather than implemented anew in each consuming application.
 
 It names the identical received bytes using the original
-`@red-cup-engineering/uri-services-section/ni-uri` producer and the native
+`@red-cup-engineering/uri-engineering-services-section/ni-uri` producer and the native
 `multiformats` SHA2-256 raw-block CIDv1 codec. The result carries
 `{kind,version,ni,cid,sourceCid?,codec,multihash,byteLength,...}`.
 `cid`, when supplied at ingress, must be an exactly canonical raw-block
@@ -57,7 +57,7 @@ provider, storage, authorization or Merkle-DAG installation.
 
 ```js
 import { mapRawBlockNi } from
-  "@red-cup-engineering/multiformats-services-section/content-address-transformations";
+  "@red-cup-engineering/multiformats-engineering-services-section/content-address-transformations";
 const bytes = new TextEncoder().encode("hello");
 const pair = await mapRawBlockNi({
   carrier: {
@@ -93,7 +93,7 @@ service, authority grant, hash type or relation schema is fabricated.
 
 ```js
 import { retainRawBlockNi } from
-  "@red-cup-engineering/multiformats-services-section/content-address-transformations";
+  "@red-cup-engineering/multiformats-engineering-services-section/content-address-transformations";
 
 // contentSpace is supplied by the actual installed and authorized host:
 // createContentAddressedSpace({ root, durableRoot, namespaces })

@@ -8,8 +8,8 @@ import { base64url } from "multiformats/bases/base64";
 import * as Digest from "multiformats/hashes/digest";
 import { sha256, sha512 } from "multiformats/hashes/sha2";
 import { createMultihash, readMultihash, verifyMultihash } from "@red-cup-engineering/multihash-address-service/address";
-import { decodeJsonByteCarrier } from "@red-cup-engineering/json-services-section/decode-json-byte-carrier";
-import { isNiUri, makeNiUri } from "@red-cup-engineering/uri-services-section/ni-uri";
+import { decodeJsonByteCarrier } from "@red-cup-engineering/json-engineering-services-section/decode-json-byte-carrier";
+import { isNiUri, makeNiUri } from "@red-cup-engineering/uri-engineering-services-section/ni-uri";
 
 const BASES = Object.freeze({ base16, base32, base36, base58btc, base64url });
 const decoder = base16.decoder.or(base32.decoder).or(base36.decoder).or(base58btc.decoder).or(base64url.decoder);
