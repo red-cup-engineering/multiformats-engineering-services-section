@@ -237,13 +237,13 @@ export async function retainRawBlockNi(body, { contentSpace, name, expected, pat
       name, expected, path, bytes: Uint8Array.from(bytes), mediaType,
     })
     : await contentSpace.retain(Uint8Array.from(bytes), { mediaType });
-  const keptNi = named ? stored?.retained?.ni : stored?.ni;
-  if (keptNi !== pair.ni || (named && stored?.ni !== pair.ni))
+  const retainedNi = named ? stored?.retained?.ni : stored?.ni;
+  if (retainedNi !== pair.ni || (named && stored?.ni !== pair.ni))
     throw new TypeError("original NI custody receipt disagrees with the admitted raw CID bytes");
   return Object.freeze({
     ...pair,
     custody: Object.freeze({
-      ni: keptNi,
+      ni: retainedNi,
       ...(stored.durable === true || stored.retained?.durable === true ? { durable: true } : {}),
       ...(named ? {
         name, rootNi: stored.rootNi, expected,
