@@ -1,0 +1,254 @@
+/** Bounded exact-byte names and CID representations; never a retrieval service. */
+import { CID } from "multiformats/cid";
+import { base16 } from "multiformats/bases/base16";
+import { base32 } from "multiformats/bases/base32";
+import { base36 } from "multiformats/bases/base36";
+import { base58btc } from "multiformats/bases/base58";
+import { base64url } from "multiformats/bases/base64";
+import * as Digest from "multiformats/hashes/digest";
+import { sha256, sha512 } from "multiformats/hashes/sha2";
+import { decodeJsonByteCarrier } from "@red-cup-engineering/json-engine/decode-json-byte-carrier";
+import { isNiUri, makeNiUri, niUriDigestBytes } from "@red-cup-engineering/semiotic-content-address-system";
+
+const BASES = Object.freeze({ base16, base32, base36, base58btc, base64url });
+const decoder = base16.decoder.or(base32.decoder).or(base36.decoder).or(base58btc.decoder).or(base64url.decoder);
+const HASHERS = Object.freeze({ "sha2-256": sha256, "sha2-512": sha512 });
+const MULTIHASH_PROFILE = "multihash/base32-lower/sha2";
+const RAW = 0x55;
+function request(body, required, optional = []) {
+  if (!body || typeof body !== "object" || Array.isArray(body) || required.some(k => !Object.hasOwn(body, k)) || Object.keys(body).some(k => !required.includes(k) && !optional.includes(k))) throw new TypeError(`request requires ${required.join(", ")}`);
+}
+function text(value, field) {
+  if (typeof value !== "string" || value.length > 1024 || !/^[\x21-\x7e]+$/u.test(value)) throw new TypeError(`${field} must be nonempty ASCII text of at most 1024 characters`);
+  return value;
+}
+function content(body) {
+  const label = body.carrier?.mediaType;
+  if (typeof label !== "string" || !label.isWellFormed() || new TextEncoder().encode(label).length > 1024) throw new TypeError("carrier.mediaType must be well-formed text of at most 1024 UTF-8 bytes");
+  return Uint8Array.from(decodeJsonByteCarrier({ carrier: body.carrier }, { maximumBytes: 65536 }).bytes);
+}
+function native(action) {
+  try { return action(); } catch (cause) { if (cause instanceof RangeError || cause instanceof TypeError) throw cause; throw new TypeError(cause.message, { cause }); }
+}
+function hashNamed(algorithm = "sha2-256") {
+  if (!Object.hasOwn(HASHERS, algorithm)) throw new TypeError("algorithm must be sha2-256 or sha2-512");
+  return HASHERS[algorithm];
+}
+function baseNamed(name = "base32") {
+  if (!Object.hasOwn(BASES, name)) throw new TypeError("base must be base16, base32, base36, base58btc or base64url");
+  return BASES[name];
+}
+function digestJson(digest) {
+  return { code: digest.code, digestLength: digest.size, digestBase64url: Buffer.from(digest.digest).toString("base64url"), bytesBase64url: Buffer.from(digest.bytes).toString("base64url") };
+}
+function hashForDigest(digest) {
+  const hasher = Object.values(HASHERS).find(candidate => candidate.code === digest.code);
+  return hasher && digest.size === (hasher === sha256 ? 32 : 64) ? hasher : null;
+}
+function readMultihash(address) {
+  const source = text(address, "address");
+  let bytes;
+  try {
+    bytes = base32.decode(source);
+  } catch (cause) {
+    throw new TypeError("multihash address is not valid base32-lower text", { cause });
+  }
+  if (base32.encode(bytes) !== source) throw new TypeError("multihash address must use canonical lowercase base32");
+  let digest;
+  try {
+    digest = Digest.decode(bytes);
+  } catch (cause) {
+    throw new TypeError("address does not contain one complete multihash", { cause });
+  }
+  const hasher = hashForDigest(digest);
+  if (!hasher) throw new TypeError("multihash requires a complete SHA2-256 or SHA2-512 digest");
+  if (!Buffer.from(bytes).equals(Digest.create(digest.code, digest.digest).bytes)) {
+    throw new TypeError("multihash uses a noncanonical binary encoding");
+  }
+  return { source, digest, hasher };
+}
+function describeMultihash(address, digest, hasher) {
+  const { code, ...coordinates } = digestJson(digest);
+  return Object.freeze({
+    kind: "multihash-address",
+    profile: MULTIHASH_PROFILE,
+    address,
+    presentation: Object.freeze({ base: "base32", canonical: true }),
+    multihash: Object.freeze({ algorithm: hasher.name, algorithmCode: code, ...coordinates }),
+  });
+}
+function cid(body) {
+  const source = text(body.cid, "cid");
+  return native(() => {
+    // Decode the original bytes ourselves through the native codec, so the
+    // native CID parser's cached input string cannot hide noncanonical text.
+    const bytes = source.startsWith("Qm") ? base58btc.decode("z" + source) : decoder.decode(source);
+    if (bytes.length > 511) throw new RangeError("CID binary representation exceeds 511 bytes");
+    const value = CID.decode(bytes);
+    if (!Number.isSafeInteger(value.code) || !Number.isSafeInteger(value.multihash.code)) throw new TypeError("CID codes exceed the exact JSON integer carrier");
+    const canonicalDigest = Digest.create(value.multihash.code, value.multihash.digest);
+    const canonical = CID.create(value.version, value.code, canonicalDigest);
+    if (!Buffer.from(canonical.bytes).equals(Buffer.from(bytes))) throw new TypeError("CID has noncanonical binary encoding");
+    if (value.version === 0) {
+      if (canonicalDigest.code !== 0x12 || canonicalDigest.size !== 32 || canonical.toString() !== source) throw new TypeError("CIDv0 requires unprefixed base58btc, dag-pb and a 32-byte SHA2-256 digest");
+    } else {
+      const base = Object.values(BASES).find(b => b.prefix === source[0]);
+      if (!base || base.encode(bytes) !== source) throw new TypeError("CID text is not canonical in a supported base");
+    }
+    return canonical;
+  });
+}
+function describeCid(value, base) {
+  const target = value.toV1();
+  return { sourceVersion: value.version, version: 1, codec: value.code, base: base.name, cid: target.toString(base), bytesBase64url: Buffer.from(target.bytes).toString("base64url"), multihash: digestJson(value.multihash) };
+}
+
+export async function nameMultihash(body) {
+  request(body, ["carrier"], ["algorithm"]);
+  const hasher = hashNamed(body.algorithm);
+  const digest = await hasher.digest(content(body));
+  return describeMultihash(base32.encode(digest.bytes), digest, hasher);
+}
+export function inspectMultihash(body) {
+  request(body, ["address"]);
+  const { source, digest, hasher } = readMultihash(body.address);
+  return describeMultihash(source, digest, hasher);
+}
+export async function compareMultihash(body) {
+  request(body, ["carrier", "address"]);
+  const claim = readMultihash(body.address);
+  const expected = await claim.hasher.digest(content(body));
+  return Object.freeze({
+    kind: "multihash-verification",
+    profile: MULTIHASH_PROFILE,
+    matches: Digest.equals(claim.digest, expected),
+    claimedAddress: claim.source,
+    expectedAddress: base32.encode(expected.bytes),
+    algorithm: claim.hasher.name,
+  });
+}
+/** CIDv0 upgrades to v1, retaining codec/digest. No codec content is decoded. */
+export function inspectCid(body) {
+  request(body, ["cid"], ["base"]);
+  const base = baseNamed(body.base);
+  return describeCid(cid(body), base);
+}
+/** Name one caller-supplied raw block, not an encoded UnixFS/DAG file. */
+export async function nameRawBlock(body) {
+  request(body, ["carrier"], ["algorithm", "base"]);
+  const hasher = hashNamed(body.algorithm), base = baseNamed(body.base), bytes = content(body);
+  const digest = await hasher.digest(bytes), value = CID.createV1(RAW, digest);
+  return { ...describeCid(value, base), byteLength: bytes.length };
+}
+/** Mismatch is a result; unknown/non-raw commitments are refused before payment. */
+export async function compareRawBlock(body) {
+  request(body, ["carrier", "cid"]);
+  const claim = cid(body);
+  if (claim.code !== RAW) throw new TypeError("raw-block verification requires the raw multicodec (85), not a UnixFS/DAG file CID");
+  const hasher = hashForDigest(claim.multihash);
+  if (!hasher) throw new TypeError("raw-block verification requires a complete SHA2-256 or SHA2-512 digest");
+  const bytes = content(body), digest = await hasher.digest(bytes), expected = CID.createV1(RAW, digest);
+  return { matches: Digest.equals(claim.multihash, digest), claimedCid: claim.toV1().toString(), expectedCid: expected.toString(), codec: RAW, algorithm: hasher.name, byteLength: bytes.length };
+}
+
+/**
+ * Typed IPFS raw-block / house-NI coordinate bridge, grounded in received bytes.
+ *
+ * SignCell names the exact supplied bytes, and its digest supplies the
+ * CIDv1 raw-block SHA2-256 commitment.
+ * A caller-supplied external CID is admitted only if it is a canonical raw
+ * SHA2-256 CID for those same bytes. UnixFS/DAG roots, Git OIDs and Guix
+ * derivation paths are NOT interchangeable with an NI of file bytes.
+ *
+ * This module neither retrieves content nor installs an external block.
+ */
+export async function mapRawBlockNi(body) {
+  request(body, ["carrier"], ["base", "expectedNi", "cid"]);
+  const bytes = content(body), ni = makeNiUri(bytes);
+  if (body.expectedNi !== undefined) {
+    if (!isNiUri(body.expectedNi))
+      throw new TypeError("expectedNi must be a canonical house SHA-256 NI");
+    if (body.expectedNi !== ni)
+      throw new TypeError("received raw bytes differ from the expected NI");
+  }
+  const digest = Digest.create(sha256.code, niUriDigestBytes(ni));
+  if (body.cid !== undefined) {
+    const incoming = cid({ cid: body.cid });
+    if (incoming.code !== RAW || incoming.multihash.code !== sha256.code ||
+        incoming.multihash.size !== 32)
+      throw new TypeError("NI bridge accepts only SHA2-256 raw-block CIDs");
+    if (!Digest.equals(incoming.multihash, digest))
+      throw new TypeError("received raw bytes differ from the supplied CID");
+  }
+  const mapped = CID.createV1(RAW, digest);
+  return {
+    kind: "semiotic-content.raw-block-coordinate-pair", version: 1,
+    ni, ...describeCid(mapped, baseNamed(body.base)), byteLength: bytes.length,
+    ...(body.cid === undefined ? {} : { sourceCid: body.cid }),
+  };
+}
+
+
+/**
+ * Retain an already-admitted IPFS raw block through the ORIGINAL shared NI
+ * ownership producer. The host supplies one authorized contentSpace capability;
+ * remote callers cannot select its filesystem, namespace or permissions.
+ *
+ * mapRawBlockNi is the one CID/NI admission: it first reconstructs both
+ * identities from a SNAPSHOT of the same exact bytes, refusing a forged CID,
+ * non-raw DAG/UnixFS coordinate or non-SHA2-256 hash. Only then do we call
+ * the existing ownership retain/putPath, rather than minting another store,
+ * CID gateway, hash family, or mutable object registry.
+ *
+ * The foreign CID is an address of one raw block, not proof that a remote IPFS
+ * peer pinned, served or authorized this data. Merkle-tree paths are not
+ * asserted Wang-edge matches, bead-thread relations or sheaf gluings.
+ */
+export async function retainRawBlockNi(body, { contentSpace, name, expected, path } = {}) {
+  request(body, ["carrier"], ["base", "expectedNi", "cid"]);
+  if (!contentSpace || typeof contentSpace.retain !== "function")
+    throw new TypeError("raw block NI retention requires an installed contentSpace.retain capability");
+  const named = name !== undefined || expected !== undefined || path !== undefined;
+  if (named && (typeof name !== "string" || !name ||
+      !Array.isArray(path) || path.length === 0 || path.length > 16 ||
+      (expected !== null && typeof expected !== "string") ||
+      typeof contentSpace.putPath !== "function"))
+    throw new TypeError("named raw block retention requires admitted name, path, expected root and putPath");
+  // A caller object can contain getters or be mutated while SHA-2 runs.
+  // Capture its original bytes, MIME label and foreign coordinates ONCE.
+  const offeredCarrier = body.carrier;
+  const carrierSnapshot = offeredCarrier && typeof offeredCarrier === "object" &&
+    !Array.isArray(offeredCarrier) ? { ...offeredCarrier } : offeredCarrier;
+  const { cid: offeredCid, expectedNi: offeredNi, base: offeredBase } = body;
+  const mediaType = carrierSnapshot?.mediaType;
+  const bytes = content({ carrier: carrierSnapshot });
+  const frozenInput = {
+    carrier: { mediaType, contentBase64: Buffer.from(bytes).toString("base64") },
+    ...(offeredCid === undefined ? {} : { cid: offeredCid }),
+    ...(offeredNi === undefined ? {} : { expectedNi: offeredNi }),
+    ...(offeredBase === undefined ? {} : { base: offeredBase }),
+  };
+  const pair = await mapRawBlockNi(frozenInput);
+  // Caller-visible media type is presentation metadata, never part of the
+  // cryptographic raw-block equivalence. The original custodian keeps its
+  // exact media-type sidecar and refuses conflicting re-presentations.
+  const stored = named
+    ? await contentSpace.putPath({
+      name, expected, path, bytes: Uint8Array.from(bytes), mediaType,
+    })
+    : await contentSpace.retain(Uint8Array.from(bytes), { mediaType });
+  const retainedNi = named ? stored?.retained?.ni : stored?.ni;
+  if (retainedNi !== pair.ni || (named && stored?.ni !== pair.ni))
+    throw new TypeError("original NI custody receipt disagrees with the admitted raw CID bytes");
+  return Object.freeze({
+    ...pair,
+    custody: Object.freeze({
+      ni: retainedNi,
+      ...(stored.durable === true || stored.retained?.durable === true ? { durable: true } : {}),
+      ...(named ? {
+        name, rootNi: stored.rootNi, expected,
+        path: Object.freeze([...path]), published: stored.published === true,
+      } : {}),
+    }),
+  });
+}
